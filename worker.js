@@ -127,7 +127,22 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
         /* SCOREBOARD */
         .scoreboard-card { margin-top: 30px; }
-        .scoreboard-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 15px; }
+        .scoreboard-header { display: flex; flex-direction: column; align-items: flex-start; gap: 15px; margin-bottom: 20px; }
+        
+        .warning-box {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 15px;
+            background: #fff8f7;
+            padding: 12px 16px;
+            border-left: 5px solid var(--danger);
+            border-radius: 8px;
+            width: 100%;
+        }
+        
+        .warning-text { font-size: 15px; color: var(--danger); font-weight: 700; flex: 1; }
+        
         .scoreboard-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
         .scoreboard-table th, .scoreboard-table td { padding: 12px; text-align: left; border-bottom: 1px solid #edf0ee; }
         .scoreboard-table th { background: var(--light); color: var(--primary); font-weight: 700; }
@@ -147,7 +162,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
         <div id="startScreen" class="card">
             <h2>শিক্ষার্থীর তথ্য</h2>
             <label>আপনার নাম লিখুন</label>
-            <input id="studentName" placeholder="পূর্ণ নাম (ইংরেজিতে বা বাংলায়)" oninput="checkAdminPreview()">
+            <input id="studentName" placeholder="পূর্ণ নাম (ইংরেজিতে বা বাংলায়)">
             <p class="note">মোট প্রশ্ন: ২৫ | প্রতিটি প্রশ্নের মান: ১</p>
             <button onclick="startQuiz()">অনুশীলন শুরু করুন</button>
         </div>
@@ -204,8 +219,13 @@ const HTML_CONTENT = `<!DOCTYPE html>
         <div class="card scoreboard-card" id="scoreboardSection">
             <div class="scoreboard-header">
                 <h2 style="margin:0;color:var(--primary);">🏆 লাইভ স্কোরবোর্ড</h2>
-                <button id="adminClearBtn" class="danger hidden" onclick="clearScoreboard()">স্কোরবোর্ড মুছুন (Admin)</button>
+                
+                <div class="warning-box">
+                    <div class="warning-text">⚠️ দয়া করে শিক্ষক ছাড়া কেউ স্কোরবোর্ড মুছবেন না।</div>
+                    <button class="danger" onclick="clearScoreboard()" style="margin: 0; padding: 10px 16px; font-size: 14px; white-space: nowrap;">স্কোরবোর্ড মুছুন</button>
+                </div>
             </div>
+            
             <div style="overflow-x:auto;">
                 <table class="scoreboard-table">
                     <thead>
@@ -297,16 +317,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
             return String(number).replace(/\\d/g, d => digits[d]);
         }
 
-        function checkAdminPreview() {
-            const val = document.getElementById("studentName").value.trim().toLowerCase();
-            const btn = document.getElementById("adminClearBtn");
-            if (val === "sakib") {
-                btn.classList.remove("hidden");
-            } else {
-                btn.classList.add("hidden");
-            }
-        }
-
         function startQuiz() {
             currentName = document.getElementById("studentName").value.trim();
             if (!currentName) {
@@ -377,18 +387,12 @@ const HTML_CONTENT = `<!DOCTYPE html>
                 const answer = textarea ? textarea.value : "";
                 let valid = false;
 
-                // ---------------------------------------------
-                // QUESTION 25 LOGIC (اسمي + Any Arabic name)
-                // ---------------------------------------------
+                // QUESTION 25 LOGIC
                 if (q.item[1][0] === "DYNAMIC_NAME") {
                     const norm = normalize(answer);
-                    // Must start with 'اسمي'
                     const startsWithIsmi = norm.startsWith("اسمي");
-                    // Extract remainder of sentence after 'اسمي'
                     const remainder = norm.replace(/^اسمي\\s*/, "");
-                    // Check if remainder contains at least one Arabic character
                     const hasArabicCharacters = /[\\u0600-\\u06FF]/.test(remainder);
-
                     valid = startsWithIsmi && hasArabicCharacters;
                 } else {
                     valid = q.item[1].some(x => normalize(answer) === normalize(x));
@@ -450,7 +454,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
             document.getElementById("resultScreen").classList.add("hidden");
             document.getElementById("startScreen").classList.remove("hidden");
             document.getElementById("studentName").value = currentName;
-            checkAdminPreview();
         }
 
         // ---------------------------------------------
@@ -496,18 +499,23 @@ const HTML_CONTENT = `<!DOCTYPE html>
         async function clearScoreboard() {
             if (!confirm("আপনি কি নিশ্চিত যে সম্পূর্ণ স্কোরবোর্ড মুছে ফেলতে চান?")) return;
 
+            // Prompt for teacher's name as an added layer of security
+            const adminName = prompt("স্কোরবোর্ড মুছতে শিক্ষকের নাম (Sakib) লিখুন:");
+            
+            if (!adminName) return; // Stop if they press cancel or leave it blank
+
             try {
                 const res = await fetch("/api/clear", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ adminName: currentName || document.getElementById("studentName").value })
+                    body: JSON.stringify({ adminName: adminName })
                 });
 
                 if (res.ok) {
                     alert("স্কোরবোর্ড সফলভাবে মুছে ফেলা হয়েছে!");
                     fetchScoreboard();
                 } else {
-                    alert("অনুমতি মেলেনি। শুধুমাত্র Sakib মুছতে পারবে।");
+                    alert("অনুমতি মেলেনি! শুধুমাত্র শিক্ষক এটি মুছতে পারবেন।");
                 }
             } catch (e) {
                 alert("স্কোরবোর্ড মুছতে সমস্যা হয়েছে।");
