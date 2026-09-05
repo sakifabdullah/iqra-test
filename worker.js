@@ -50,7 +50,7 @@ export default {
         if (url.pathname === "/api/clear" && request.method === "POST") {
             try {
                 const body = await request.json();
-                if ((body.adminName || "").trim().toLowerCase() === "sakib") {
+                if ((body.adminName || "").trim().toLowerCase() === "abrarul haque") {
                     await env.QUIZ_KV.put("scores", "[]");
                     return new Response(JSON.stringify({ success: true }), {
                         headers: { "Content-Type": "application/json" }
@@ -500,7 +500,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
             if (!confirm("আপনি কি নিশ্চিত যে সম্পূর্ণ স্কোরবোর্ড মুছে ফেলতে চান?")) return;
 
             // Prompt for teacher's name as an added layer of security
-            const adminName = prompt("স্কোরবোর্ড মুছতে শিক্ষকের নাম (Sakib) লিখুন:");
+            const adminName = prompt("স্কোরবোর্ড মুছতে শিক্ষকের নাম (Abrarul Haque) লিখুন:");
             
             if (!adminName) return; // Stop if they press cancel or leave it blank
 
