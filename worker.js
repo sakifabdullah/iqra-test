@@ -45,12 +45,13 @@ export default {
         }
 
         // ----------------------------------------------------
-        // API: CLEAR SCOREBOARD (Sakib only)
+        // API: CLEAR SCOREBOARD (Abrarul Haq only)
         // ----------------------------------------------------
         if (url.pathname === "/api/clear" && request.method === "POST") {
             try {
                 const body = await request.json();
-                if ((body.adminName || "").trim().toLowerCase() === "abrarul haque") {
+                // Check for the teacher's name (case-insensitive)
+                if ((body.adminName || "").trim().toLowerCase() === "abrarul haq") {
                     await env.QUIZ_KV.put("scores", "[]");
                     return new Response(JSON.stringify({ success: true }), {
                         headers: { "Content-Type": "application/json" }
@@ -255,8 +256,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
                     ["مَفْتُوحٌ", ["খোলা"]],
                     ["ضَيِّقٌ", ["সংকীর্ণ", "সরু", "সংকীর্ণ / সরু"]],
                     ["مَاهِرٌ", ["দক্ষ", "দক্ষ।"]],
-                    ["عَمَّةٌ", ["একজন ফুফু", "একটি ফুফু", "ফুফু"]],
-                    ["أَيُّهَا الْوَلَدُ", ["হে বালক", "হে বালক।"]],
+                    ["عَمَّةٌ", ["একজন ফুফু", "একটি ফুফু", "ফুফু", "ফুপি", "একজন ফুপি"]],
+                    ["أَيُّهَا الْوَلَدُ", ["হে বালক", "হে বালক।", "হে ছেলে", "হে ছেলে।"]],
                     ["خَالَةٌ", ["একজন খালা", "একটি খালা", "খালা"]],
                     ["الْعَدُوُّ", ["শত্রুটি", "শত্রু"]],
                     ["مُفِيدٌ", ["উপকারী", "উপকারী।"]]
@@ -267,7 +268,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
                 type: "বাংলা অর্থ লিখুন",
                 items: [
                     ["الْمَسْجِدُ كَبِيرٌ", ["মসজিদটি বড়", "মসজিদটি বড়।"]],
-                    ["هَذِهِ مَدْرَسَةٌ صَغِيرَةٌ", ["এটি একটি ছোট বিদ্যালয়", "এটি একটি ছোট বিদ্যালয়", "এটি একটি ছোট স্কুল"]],
+                    ["هَذِهِ مَدْرَسَةٌ صَغِيرَةٌ", ["এটি একটি ছোট বিদ্যালয়", "এটি একটি ছোট বিদ্যালয়", "এটি একটি ছোট স্কুল", "এটি একটি ছোট মাদ্রাসা"]],
                     ["قَمِيصٌ جَدِيدٌ", ["একটি নতুন জামা", "একটি নতুন জামা।"]],
                     ["كَيْفَ السَّاعَةُ؟", ["ঘড়িটি কেমন", "ঘড়িটি কেমন?"]],
                     ["هَذَا الْوَلَدُ قَوِيٌّ وَذَلِكَ الْوَلَدُ ضَعِيفٌ", ["এই ছেলেটি শক্তিশালী এবং ওই ছেলেটি দুর্বল", "এই ছেলেটি শক্তিশালী এবং সেই ছেলেটি দুর্বল"]]
@@ -288,8 +289,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
                 title: "৪. আরবিতে প্রশ্নের উত্তর",
                 type: "আরবিতে উত্তর লিখুন",
                 items: [
-                    ["كَيْفَ هَذَا الْكِتَابُ؟", ["هَذَا الْكِتَابُ جَمِيلٌ", "هذا الكتاب جميل"]],
-                    ["كَيْفَ التِّلْمِيذُ؟", ["التِّلْمِيذُ مَاهِرٌ", "التلميذ ماهر"]],
+                    ["كَيْفَ هَذَا الْكِتَابُ؟", ["DYNAMIC_KITAB"]],
+                    ["كَيْفَ التِّلْمِيذُ؟", ["DYNAMIC_TILMEEZ"]],
                     ["هَلْ هَذَا مَسْجِدٌ؟", ["نَعَمْ، هَذَا مَسْجِدٌ", "نعم هذا مسجد", "نَعَمْ هَذَا مَسْجِدٌ"]],
                     ["هَلْ هَذَا الْمَسْجِدُ جَمِيلٌ؟", ["نَعَمْ، هَذَا الْمَسْجِدُ جَمِيلٌ", "نعم هذا المسجد جميل", "نَعَمْ هَذَا الْمَسْجِدُ جَمِيلٌ"]],
                     ["مَا اسْمُكَ؟", ["DYNAMIC_NAME"]]
@@ -300,7 +301,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
         let questions = [];
         let currentName = "";
 
-        // Standard text normalizer
+        // Standard text normalizer (keeps 'ة' untouched to allow gender checking)
         function normalize(s) {
             return (s || "")
                 .trim()
@@ -375,6 +376,12 @@ const HTML_CONTENT = `<!DOCTYPE html>
             if (q.item[1][0] === "DYNAMIC_NAME") {
                 return "اسمي ... (আপনার নাম)";
             }
+            if (q.item[1][0] === "DYNAMIC_TILMEEZ") {
+                return "التِّلْمِيذُ ... (যেকোনো পুংলিঙ্গ শব্দ)";
+            }
+            if (q.item[1][0] === "DYNAMIC_KITAB") {
+                return "هَذَا الْكِتَابُ ... (যেকোনো পুংলিঙ্গ শব্দ)";
+            }
             return q.item[1][0];
         }
 
@@ -387,15 +394,36 @@ const HTML_CONTENT = `<!DOCTYPE html>
                 const answer = textarea ? textarea.value : "";
                 let valid = false;
 
-                // QUESTION 25 LOGIC
+                // DYNAMIC LOGIC FOR PATTERN TESTING & GENDER AGREEMENT
+                const norm = normalize(answer);
+                const words = norm.split(" ").filter(w => w !== ""); // Splits sentence into an array of distinct words
+
                 if (q.item[1][0] === "DYNAMIC_NAME") {
-                    const norm = normalize(answer);
-                    const startsWithIsmi = norm.startsWith("اسمي");
-                    const remainder = norm.replace(/^اسمي\\s*/, "");
+                    const startsWithIsmi = words[0] === "اسمي";
+                    const remainder = words.slice(1).join(" ");
                     const hasArabicCharacters = /[\\u0600-\\u06FF]/.test(remainder);
                     valid = startsWithIsmi && hasArabicCharacters;
+                    
+                } else if (q.item[1][0] === "DYNAMIC_TILMEEZ") {
+                    const startsWithTilmeez = words[0] === "التلميذ"; // Exact match protects against "التلميذة"
+                    const remainder = words.slice(1).join(" ");
+                    const hasArabicCharacters = /[\\u0600-\\u06FF]/.test(remainder);
+                    // NEW GRAMMAR RULE: Fails if the remainder contains a feminine Taa Marboota (ة)
+                    const isMasculine = !remainder.includes("ة"); 
+                    
+                    valid = startsWithTilmeez && hasArabicCharacters && isMasculine;
+                    
+                } else if (q.item[1][0] === "DYNAMIC_KITAB") {
+                    const startsWithKitab = words[0] === "هذا" && words[1] === "الكتاب";
+                    const remainder = words.slice(2).join(" ");
+                    const hasArabicCharacters = /[\\u0600-\\u06FF]/.test(remainder);
+                    // NEW GRAMMAR RULE: Fails if the remainder contains a feminine Taa Marboota (ة)
+                    const isMasculine = !remainder.includes("ة"); 
+                    
+                    valid = startsWithKitab && hasArabicCharacters && isMasculine;
+                    
                 } else {
-                    valid = q.item[1].some(x => normalize(answer) === normalize(x));
+                    valid = q.item[1].some(x => norm === normalize(x));
                 }
 
                 if (valid) {
@@ -500,7 +528,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
             if (!confirm("আপনি কি নিশ্চিত যে সম্পূর্ণ স্কোরবোর্ড মুছে ফেলতে চান?")) return;
 
             // Prompt for teacher's name as an added layer of security
-            const adminName = prompt("স্কোরবোর্ড মুছতে শিক্ষকের নাম (Abrarul Haque) লিখুন:");
+            const adminName = prompt("স্কোরবোর্ড মুছতে শিক্ষকের নাম (Abrarul Haq) লিখুন:");
             
             if (!adminName) return; // Stop if they press cancel or leave it blank
 
