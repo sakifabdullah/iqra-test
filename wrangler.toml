@@ -1,0 +1,7 @@
+name = "iqra-test"
+main = "worker.js"
+compatibility_date = "2026-09-05"
+
+[[kv_namespaces]]
+binding = "QUIZ_KV"
+id = "4412e407ad444400a6073f79401fdc47"
