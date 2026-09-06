@@ -13,17 +13,23 @@ export default {
         }
 
         // ----------------------------------------------------
-        // API: SAVE SCORE
+        // API: SAVE SCORE (Now counts attempts and saves mistakes)
         // ----------------------------------------------------
         if (url.pathname === "/api/scores" && request.method === "POST") {
             try {
                 const body = await request.json();
                 const existing = JSON.parse((await env.QUIZ_KV.get("scores")) || "[]");
 
+                // Calculate which attempt this is for the specific student
+                const previousAttempts = existing.filter(e => e.name.toLowerCase() === body.name.toLowerCase()).length;
+                const attemptNumber = previousAttempts + 1;
+
                 existing.unshift({
                     name: body.name,
+                    attempt: attemptNumber,
                     score: body.score,
                     total: body.total || 25,
+                    mistakes: body.mistakes || [], // Save the exact mistakes they made
                     timestamp: new Date().toLocaleTimeString("bn-BD", {
                         timeZone: "Asia/Dhaka",
                         hour: "2-digit",
@@ -33,7 +39,7 @@ export default {
                     })
                 });
 
-                // Keep the latest 100 entries
+                // Keep the latest 100 entries so the database doesn't get too heavy
                 await env.QUIZ_KV.put("scores", JSON.stringify(existing.slice(0, 100)));
 
                 return new Response(JSON.stringify({ success: true }), {
@@ -50,7 +56,6 @@ export default {
         if (url.pathname === "/api/clear" && request.method === "POST") {
             try {
                 const body = await request.json();
-                // Check for the teacher's name (case-insensitive)
                 if ((body.adminName || "").trim().toLowerCase() === "abrarul haq") {
                     await env.QUIZ_KV.put("scores", "[]");
                     return new Response(JSON.stringify({ success: true }), {
@@ -100,6 +105,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
         input, textarea { width: 100%; padding: 14px; border: 1.5px solid #ccd8d2; border-radius: 10px; font: inherit; font-size: 17px; }
         textarea { min-height: 92px; resize: vertical; }
         button { border: 0; border-radius: 10px; padding: 13px 20px; font: inherit; font-weight: 700; cursor: pointer; background: var(--primary); color: white; margin-top: 14px; }
+        button.secondary { background: #e8efeb; color: var(--primary); }
         button.danger { background: var(--danger); }
         .hidden { display: none !important; }
         .section-title { background: var(--light); padding: 12px 16px; border-radius: 10px; color: var(--primary); font-weight: 800; margin-top: 28px; }
@@ -124,7 +130,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
         .result-stat .value { font-size: 28px; font-weight: 800; color: var(--primary); }
         .score-box { margin-top: 18px; padding: 22px; border-radius: 16px; background: var(--primary); color: white; }
         .score-value { font-size: 42px; font-weight: 800; }
-        .restart-wrap { text-align: center; padding-bottom: 30px; }
+        .restart-wrap { text-align: center; padding-bottom: 30px; display: flex; gap: 15px; justify-content: center; }
 
         /* SCOREBOARD */
         .scoreboard-card { margin-top: 30px; }
@@ -148,6 +154,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
         .scoreboard-table th, .scoreboard-table td { padding: 12px; text-align: left; border-bottom: 1px solid #edf0ee; }
         .scoreboard-table th { background: var(--light); color: var(--primary); font-weight: 700; }
         .rank-badge { font-weight: bold; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; background: #e8efeb; color: var(--primary); }
+        .attempt-tag { font-size: 12px; color: #607069; font-weight: normal; margin-top: 3px; }
     </style>
 </head>
 <body>
@@ -206,13 +213,14 @@ const HTML_CONTENT = `<!DOCTYPE html>
                     </div>
                 </div>
                 <div class="score-box">
-                    <div>আপনার স্কোর</div>
+                    <div>স্কোর</div>
                     <div class="score-value" id="scoreText">০ / ২৫</div>
                 </div>
             </div>
 
             <div class="restart-wrap">
-                <button onclick="restart()">আবার চেষ্টা করুন</button>
+                <button id="tryAgainBtn" onclick="restart()">আবার চেষ্টা করুন</button>
+                <button id="backToScoreboardBtn" class="secondary hidden" onclick="closeHistory()">স্কোরবোর্ডে ফিরে যান</button>
             </div>
         </div>
 
@@ -234,7 +242,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
                             <th>#</th>
                             <th>নাম</th>
                             <th>স্কোর</th>
-                            <th>সময়</th>
+                            <th>খাতা</th>
                         </tr>
                     </thead>
                     <tbody id="scoreboardBody">
@@ -300,8 +308,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
         let questions = [];
         let currentName = "";
+        let globalScoreList = []; // Holds data for the scoreboard review
 
-        // Standard text normalizer (keeps 'ة' untouched to allow gender checking)
         function normalize(s) {
             return (s || "")
                 .trim()
@@ -333,6 +341,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
             });
 
             document.getElementById("startScreen").classList.add("hidden");
+            document.getElementById("scoreboardSection").classList.add("hidden");
             document.getElementById("quizScreen").classList.remove("hidden");
             document.getElementById("studentDisplay").textContent = "শিক্ষার্থী: " + currentName;
 
@@ -373,15 +382,9 @@ const HTML_CONTENT = `<!DOCTYPE html>
         }
 
         function getCorrectAnswer(q) {
-            if (q.item[1][0] === "DYNAMIC_NAME") {
-                return "اسمي ... (আপনার নাম)";
-            }
-            if (q.item[1][0] === "DYNAMIC_TILMEEZ") {
-                return "التِّلْمِيذُ ... (যেকোনো পুংলিঙ্গ শব্দ)";
-            }
-            if (q.item[1][0] === "DYNAMIC_KITAB") {
-                return "هَذَا الْكِتَابُ ... (যেকোনো পুংলিঙ্গ শব্দ)";
-            }
+            if (q.item[1][0] === "DYNAMIC_NAME") return "اسمي ... (আপনার নাম)";
+            if (q.item[1][0] === "DYNAMIC_TILMEEZ") return "التِّلْمِيذُ ... (যেকোনো পুংলিঙ্গ শব্দ)";
+            if (q.item[1][0] === "DYNAMIC_KITAB") return "هَذَا الْكِتَابُ ... (যেকোনো পুংলিঙ্গ শব্দ)";
             return q.item[1][0];
         }
 
@@ -394,41 +397,27 @@ const HTML_CONTENT = `<!DOCTYPE html>
                 const answer = textarea ? textarea.value : "";
                 let valid = false;
 
-                // DYNAMIC LOGIC FOR PATTERN TESTING & GENDER AGREEMENT
                 const norm = normalize(answer);
-                const words = norm.split(" ").filter(w => w !== ""); // Splits sentence into an array of distinct words
+                const words = norm.split(" ").filter(w => w !== "");
 
                 if (q.item[1][0] === "DYNAMIC_NAME") {
                     const startsWithIsmi = words[0] === "اسمي";
                     const remainder = words.slice(1).join(" ");
-                    const hasArabicCharacters = /[\\u0600-\\u06FF]/.test(remainder);
-                    valid = startsWithIsmi && hasArabicCharacters;
-                    
+                    valid = startsWithIsmi && /[\\u0600-\\u06FF]/.test(remainder);
                 } else if (q.item[1][0] === "DYNAMIC_TILMEEZ") {
-                    const startsWithTilmeez = words[0] === "التلميذ"; // Exact match protects against "التلميذة"
+                    const startsWithTilmeez = words[0] === "التلميذ"; 
                     const remainder = words.slice(1).join(" ");
-                    const hasArabicCharacters = /[\\u0600-\\u06FF]/.test(remainder);
-                    // NEW GRAMMAR RULE: Fails if the remainder contains a feminine Taa Marboota (ة)
-                    const isMasculine = !remainder.includes("ة"); 
-                    
-                    valid = startsWithTilmeez && hasArabicCharacters && isMasculine;
-                    
+                    valid = startsWithTilmeez && /[\\u0600-\\u06FF]/.test(remainder) && !remainder.includes("ة");
                 } else if (q.item[1][0] === "DYNAMIC_KITAB") {
                     const startsWithKitab = words[0] === "هذا" && words[1] === "الكتاب";
                     const remainder = words.slice(2).join(" ");
-                    const hasArabicCharacters = /[\\u0600-\\u06FF]/.test(remainder);
-                    // NEW GRAMMAR RULE: Fails if the remainder contains a feminine Taa Marboota (ة)
-                    const isMasculine = !remainder.includes("ة"); 
-                    
-                    valid = startsWithKitab && hasArabicCharacters && isMasculine;
-                    
+                    valid = startsWithKitab && /[\\u0600-\\u06FF]/.test(remainder) && !remainder.includes("ة");
                 } else {
                     valid = q.item[1].some(x => norm === normalize(x));
                 }
 
-                if (valid) {
-                    correct++;
-                } else {
+                if (valid) correct++;
+                else {
                     mistakes.push({
                         question: q.item[0],
                         given: answer.trim() || "কোনো উত্তর দেওয়া হয়নি",
@@ -438,13 +427,14 @@ const HTML_CONTENT = `<!DOCTYPE html>
             });
 
             showMistakes(mistakes);
-            showResult(correct, mistakes.length);
+            showResult(correct, 25 - correct, currentName);
 
-            // Send score to backend
-            saveScore(currentName, correct, 25);
+            // Send score to backend along with the exact mistakes
+            saveScore(currentName, correct, 25, mistakes);
 
             document.getElementById("quizScreen").classList.add("hidden");
             document.getElementById("resultScreen").classList.remove("hidden");
+            document.getElementById("scoreboardSection").classList.remove("hidden");
             window.scrollTo({ top: 0, behavior: "smooth" });
         }
 
@@ -452,18 +442,18 @@ const HTML_CONTENT = `<!DOCTYPE html>
             const box = document.getElementById("mistakes");
             const title = document.getElementById("mistakesTitle");
 
-            if (mistakes.length === 0) {
+            if (!mistakes || mistakes.length === 0) {
                 title.textContent = "কোনো ভুল হয়নি!";
                 box.innerHTML = '<div class="no-mistakes">মাশাআল্লাহ! আপনার কোনো ভুল হয়নি।</div>';
                 return;
             }
 
-            title.textContent = "আপনার ভুলগুলো — " + toBanglaNumber(mistakes.length) + "টি";
+            title.textContent = "ভুলগুলো — " + toBanglaNumber(mistakes.length) + "টি";
             box.innerHTML = mistakes.map((m, i) => \`
                 <div class="mistake">
                   <div class="mistake-number">ভুল প্রশ্ন \${toBanglaNumber(i + 1)}</div>
                   <div class="arabic" style="font-size:24px">\${m.question}</div>
-                  <div class="answer-label"><b>আপনার উত্তর:</b></div>
+                  <div class="answer-label"><b>উত্তর:</b></div>
                   <div class="given-answer">\${m.given}</div>
                   <div class="answer-label"><b>সঠিক উত্তর:</b></div>
                   <div class="correct-answer" dir="rtl" style="font-family:'Noto Naskh Arabic',serif;font-size:23px">\${m.correct}</div>
@@ -471,8 +461,9 @@ const HTML_CONTENT = `<!DOCTYPE html>
             \`).join("");
         }
 
-        function showResult(score, wrong) {
-            document.getElementById("resultName").textContent = currentName;
+        function showResult(score, wrong, nameToShow, attemptNumber = null) {
+            let attemptText = attemptNumber ? \` (চেষ্টা: \${toBanglaNumber(attemptNumber)})\` : "";
+            document.getElementById("resultName").textContent = nameToShow + attemptText;
             document.getElementById("correctAnswers").textContent = toBanglaNumber(score);
             document.getElementById("wrongAnswers").textContent = toBanglaNumber(wrong);
             document.getElementById("scoreText").textContent = toBanglaNumber(score) + " / ২৫";
@@ -481,29 +472,36 @@ const HTML_CONTENT = `<!DOCTYPE html>
         function restart() {
             document.getElementById("resultScreen").classList.add("hidden");
             document.getElementById("startScreen").classList.remove("hidden");
+            document.getElementById("scoreboardSection").classList.remove("hidden");
             document.getElementById("studentName").value = currentName;
         }
 
         // ---------------------------------------------
-        // SCOREBOARD API CALLS
+        // SCOREBOARD API CALLS & HISTORY REVIEW
         // ---------------------------------------------
         async function fetchScoreboard() {
             try {
                 const res = await fetch("/api/scores");
-                const list = await res.json();
+                globalScoreList = await res.json();
                 const tbody = document.getElementById("scoreboardBody");
 
-                if (!list || list.length === 0) {
+                if (!globalScoreList || globalScoreList.length === 0) {
                     tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#777;">এখনও কোনো স্কোর নেই।</td></tr>';
                     return;
                 }
 
-                tbody.innerHTML = list.map((item, idx) => \`
+                tbody.innerHTML = globalScoreList.map((item, idx) => \`
                     <tr>
                         <td><span class="rank-badge">\${toBanglaNumber(idx + 1)}</span></td>
-                        <td><b>\${escapeHtml(item.name)}</b></td>
+                        <td>
+                            <b>\${escapeHtml(item.name)}</b>
+                            <div class="attempt-tag">চেষ্টা: \${toBanglaNumber(item.attempt || 1)}</div>
+                        </td>
                         <td style="color:var(--primary);font-weight:700;">\${toBanglaNumber(item.score)} / \${toBanglaNumber(item.total)}</td>
-                        <td style="font-size:14px;color:#777;">\${item.timestamp}</td>
+                        <td>
+                            <button class="secondary" style="margin:0;padding:6px 12px;font-size:13px;" onclick="viewHistory(\${idx})">খাতা দেখুন</button>
+                            <div style="font-size:12px;color:#777;margin-top:5px;">\${item.timestamp}</div>
+                        </td>
                     </tr>
                 \`).join("");
             } catch (e) {
@@ -511,26 +509,55 @@ const HTML_CONTENT = `<!DOCTYPE html>
             }
         }
 
-        async function saveScore(name, score, total) {
+        async function saveScore(name, score, total, mistakes) {
             try {
                 await fetch("/api/scores", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ name, score, total })
+                    body: JSON.stringify({ name, score, total, mistakes })
                 });
-                fetchScoreboard();
+                fetchScoreboard(); // Reload board with new attempt count and view button
             } catch (e) {
                 console.error("Save score failed", e);
             }
         }
 
+        // Function to load a specific student's past paper
+        function viewHistory(index) {
+            const data = globalScoreList[index];
+            if (!data) return;
+
+            showMistakes(data.mistakes || []);
+            showResult(data.score, (data.total - data.score), data.name, data.attempt || 1);
+
+            document.getElementById("startScreen").classList.add("hidden");
+            document.getElementById("quizScreen").classList.add("hidden");
+            document.getElementById("scoreboardSection").classList.add("hidden");
+            document.getElementById("resultScreen").classList.remove("hidden");
+
+            // Swap buttons to show "Back to Scoreboard" mode
+            document.getElementById("tryAgainBtn").classList.add("hidden");
+            document.getElementById("backToScoreboardBtn").classList.remove("hidden");
+
+            window.scrollTo({ top: 0, behavior: "smooth" });
+        }
+
+        // Function to exit the history review mode
+        function closeHistory() {
+            document.getElementById("resultScreen").classList.add("hidden");
+            document.getElementById("startScreen").classList.remove("hidden");
+            document.getElementById("scoreboardSection").classList.remove("hidden");
+
+            // Reset buttons for normal quiz flow
+            document.getElementById("tryAgainBtn").classList.remove("hidden");
+            document.getElementById("backToScoreboardBtn").classList.add("hidden");
+            document.getElementById("studentName").value = currentName || "";
+        }
+
         async function clearScoreboard() {
             if (!confirm("আপনি কি নিশ্চিত যে সম্পূর্ণ স্কোরবোর্ড মুছে ফেলতে চান?")) return;
-
-            // Prompt for teacher's name as an added layer of security
             const adminName = prompt("স্কোরবোর্ড মুছতে শিক্ষকের নাম (Abrarul Haq) লিখুন:");
-            
-            if (!adminName) return; // Stop if they press cancel or leave it blank
+            if (!adminName) return; 
 
             try {
                 const res = await fetch("/api/clear", {
