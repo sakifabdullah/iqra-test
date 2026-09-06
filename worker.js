@@ -13,23 +13,28 @@ export default {
         }
 
         // ----------------------------------------------------
-        // API: SAVE SCORE (Now counts attempts and saves mistakes)
+        // API: SAVE NEW SUBMISSION (Status: Pending)
         // ----------------------------------------------------
         if (url.pathname === "/api/scores" && request.method === "POST") {
             try {
                 const body = await request.json();
                 const existing = JSON.parse((await env.QUIZ_KV.get("scores")) || "[]");
 
-                // Calculate which attempt this is for the specific student
+                // Calculate attempt number
                 const previousAttempts = existing.filter(e => e.name.toLowerCase() === body.name.toLowerCase()).length;
                 const attemptNumber = previousAttempts + 1;
 
+                // Generate unique ID for this paper
+                const paperId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+
                 existing.unshift({
+                    id: paperId,
                     name: body.name,
                     attempt: attemptNumber,
-                    score: body.score,
+                    answers: body.answers, // Student's raw input
+                    status: "pending",     // Needs teacher review
+                    score: 0,
                     total: body.total || 25,
-                    mistakes: body.mistakes || [], // Save the exact mistakes they made
                     timestamp: new Date().toLocaleTimeString("bn-BD", {
                         timeZone: "Asia/Dhaka",
                         hour: "2-digit",
@@ -39,12 +44,37 @@ export default {
                     })
                 });
 
-                // Keep the latest 100 entries so the database doesn't get too heavy
+                // Keep the latest 100 entries
                 await env.QUIZ_KV.put("scores", JSON.stringify(existing.slice(0, 100)));
 
                 return new Response(JSON.stringify({ success: true }), {
                     headers: { "Content-Type": "application/json" }
                 });
+            } catch (err) {
+                return new Response(JSON.stringify({ error: err.message }), { status: 400 });
+            }
+        }
+
+        // ----------------------------------------------------
+        // API: TEACHER SUBMITS GRADES
+        // ----------------------------------------------------
+        if (url.pathname === "/api/grade" && request.method === "POST") {
+            try {
+                const body = await request.json();
+                const existing = JSON.parse((await env.QUIZ_KV.get("scores")) || "[]");
+
+                const index = existing.findIndex(e => e.id === body.id);
+                if (index > -1) {
+                    existing[index].score = body.score;
+                    existing[index].status = "graded";
+                    existing[index].gradedAnswers = body.gradedAnswers; // Array of true/false
+
+                    await env.QUIZ_KV.put("scores", JSON.stringify(existing));
+                    return new Response(JSON.stringify({ success: true }), {
+                        headers: { "Content-Type": "application/json" }
+                    });
+                }
+                return new Response(JSON.stringify({ error: "Paper not found" }), { status: 404 });
             } catch (err) {
                 return new Response(JSON.stringify({ error: err.message }), { status: 400 });
             }
@@ -82,7 +112,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>আরবি ভাষা অনুশীলন</title>
+    <title>আরবি ভাষা অনুশীলন (Teacher Grading)</title>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@400;600;700&family=Noto+Sans+Bengali:wght@400;500;600;700;800&display=swap');
 
@@ -92,6 +122,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
             --accent: #d9a441;
             --danger: #c73e3a;
             --text: #1e2925;
+            --pending: #d9a441;
         }
 
         * { box-sizing: border-box; }
@@ -102,12 +133,14 @@ const HTML_CONTENT = `<!DOCTYPE html>
         h1 { color: var(--primary); margin: 0 0 8px; }
         .subtitle { color: #607069; }
         label { font-weight: 700; display: block; margin: 12px 0 7px; }
-        input, textarea { width: 100%; padding: 14px; border: 1.5px solid #ccd8d2; border-radius: 10px; font: inherit; font-size: 17px; }
+        input[type="text"], textarea { width: 100%; padding: 14px; border: 1.5px solid #ccd8d2; border-radius: 10px; font: inherit; font-size: 17px; }
         textarea { min-height: 92px; resize: vertical; }
+        
         button { border: 0; border-radius: 10px; padding: 13px 20px; font: inherit; font-weight: 700; cursor: pointer; background: var(--primary); color: white; margin-top: 14px; }
         button.secondary { background: #e8efeb; color: var(--primary); }
         button.danger { background: var(--danger); }
         .hidden { display: none !important; }
+        
         .section-title { background: var(--light); padding: 12px 16px; border-radius: 10px; color: var(--primary); font-weight: 800; margin-top: 28px; }
         .question { padding: 20px 0; border-bottom: 1px solid #edf0ee; }
         .qnum { font-weight: 800; color: var(--primary); }
@@ -116,45 +149,29 @@ const HTML_CONTENT = `<!DOCTYPE html>
         .progress-wrap { height: 10px; background: #e4ece8; border-radius: 99px; overflow: hidden; margin-top: 10px; }
         .progress { height: 100%; background: var(--primary); width: 0%; transition: .3s; }
 
-        /* MISTAKES & RESULTS */
-        .mistakes-card { max-width: 700px; margin: 20px auto; }
-        .mistakes-title { text-align: center; color: var(--danger); margin-top: 0; }
-        .mistake { border-left: 5px solid var(--danger); background: #fff8f7; padding: 16px; margin: 14px 0; border-radius: 10px; }
-        .mistake-number { font-weight: 800; color: var(--danger); margin-bottom: 8px; }
-        .given-answer { margin: 5px 0 10px; color: #5d2927; }
-        .correct-answer { margin-top: 5px; color: var(--primary); font-weight: 700; }
-        .no-mistakes { border-left: 5px solid #31906c; background: #f4fbf7; padding: 18px; border-radius: 10px; text-align: center; font-weight: 700; color: var(--primary); }
-        .result-card { max-width: 600px; margin: 30px auto; padding: 32px 24px; border-radius: 22px; background: #ffffff; box-shadow: 0 10px 35px #00000015; text-align: center; }
-        .result-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 20px 0; }
-        .result-stat { background: var(--light); border-radius: 14px; padding: 20px 10px; }
-        .result-stat .value { font-size: 28px; font-weight: 800; color: var(--primary); }
-        .score-box { margin-top: 18px; padding: 22px; border-radius: 16px; background: var(--primary); color: white; }
-        .score-value { font-size: 42px; font-weight: 800; }
-        .restart-wrap { text-align: center; padding-bottom: 30px; display: flex; gap: 15px; justify-content: center; }
-
         /* SCOREBOARD */
         .scoreboard-card { margin-top: 30px; }
         .scoreboard-header { display: flex; flex-direction: column; align-items: flex-start; gap: 15px; margin-bottom: 20px; }
-        
-        .warning-box {
-            display: flex;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 15px;
-            background: #fff8f7;
-            padding: 12px 16px;
-            border-left: 5px solid var(--danger);
-            border-radius: 8px;
-            width: 100%;
-        }
-        
+        .warning-box { display: flex; align-items: center; flex-wrap: wrap; gap: 15px; background: #fff8f7; padding: 12px 16px; border-left: 5px solid var(--danger); border-radius: 8px; width: 100%; }
+        .teacher-warning { background: #fffdf5; border-left: 5px solid var(--pending); padding: 16px; border-radius: 8px; margin-bottom: 20px; font-weight: 700; color: #8a641c; }
+        .success-box { background: #f4fbf7; border-left: 5px solid #31906c; padding: 16px; border-radius: 8px; margin-bottom: 20px; font-weight: 700; color: var(--primary); text-align: center; font-size: 18px; }
         .warning-text { font-size: 15px; color: var(--danger); font-weight: 700; flex: 1; }
-        
         .scoreboard-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
         .scoreboard-table th, .scoreboard-table td { padding: 12px; text-align: left; border-bottom: 1px solid #edf0ee; }
         .scoreboard-table th { background: var(--light); color: var(--primary); font-weight: 700; }
         .rank-badge { font-weight: bold; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; background: #e8efeb; color: var(--primary); }
         .attempt-tag { font-size: 12px; color: #607069; font-weight: normal; margin-top: 3px; }
+
+        /* GRADING / REVIEW UI */
+        .mistake { border-left: 5px solid #d3dee0; background: #f9fbfb; padding: 16px; margin: 14px 0; border-radius: 10px; }
+        .mistake-number { font-weight: 800; color: #5a757a; margin-bottom: 8px; }
+        .answer-label { font-weight: 700; margin-top: 10px; font-size: 14px; color: #666; }
+        .given-answer { margin: 5px 0; color: #111; font-size: 18px; font-weight: 600; }
+        .correct-answer { margin-top: 5px; color: var(--primary); font-weight: 700; }
+        .grading-options { margin-top: 15px; padding-top: 15px; border-top: 1px dashed #ccd8d2; display: flex; gap: 20px; }
+        .grading-options label { margin: 0; display: inline-flex; align-items: center; gap: 8px; font-size: 16px; cursor: pointer; background: #fff; padding: 10px 15px; border-radius: 8px; border: 1px solid #ccd8d2; }
+        .grading-options input[type="radio"] { width: auto; transform: scale(1.3); margin: 0; }
+        .status-pending { color: var(--pending); font-weight: 700; }
     </style>
 </head>
 <body>
@@ -170,7 +187,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
         <div id="startScreen" class="card">
             <h2>শিক্ষার্থীর তথ্য</h2>
             <label>আপনার নাম লিখুন</label>
-            <input id="studentName" placeholder="পূর্ণ নাম (ইংরেজিতে বা বাংলায়)">
+            <input type="text" id="studentName" placeholder="পূর্ণ নাম (ইংরেজিতে বা বাংলায়)">
             <p class="note">মোট প্রশ্ন: ২৫ | প্রতিটি প্রশ্নের মান: ১</p>
             <button onclick="startQuiz()">অনুশীলন শুরু করুন</button>
         </div>
@@ -188,39 +205,27 @@ const HTML_CONTENT = `<!DOCTYPE html>
             </div>
             <form id="quizForm"></form>
             <div class="card">
-                <button type="button" onclick="submitQuiz()">উত্তর জমা দিন</button>
+                <button type="button" id="submitBtn" onclick="submitQuiz()">উত্তর জমা দিন</button>
             </div>
         </div>
 
-        <!-- RESULT SCREEN -->
-        <div id="resultScreen" class="hidden">
-            <div class="card mistakes-card">
-                <h2 class="mistakes-title" id="mistakesTitle">আপনার ভুলগুলো</h2>
-                <div id="mistakes"></div>
+        <!-- POST-SUBMISSION SUCCESS MESSAGE -->
+        <div id="submittedScreen" class="hidden">
+            <div class="card" style="text-align:center; padding: 40px 20px;">
+                <h2 style="color:var(--primary);">মাশাআল্লাহ!</h2>
+                <p style="font-size:18px;">আপনার খাতাটি সফলভাবে জমা হয়েছে।</p>
+                <p style="color:#607069;">শিক্ষক খাতাটি মূল্যায়ন (Grade) করার পর স্কোরবোর্ডে আপনার নম্বর দেখতে পাবেন।</p>
+                <button onclick="window.location.reload()">স্কোরবোর্ডে ফিরে যান</button>
             </div>
+        </div>
 
-            <div class="result-card">
-                <h2>ফলাফল</h2>
-                <div class="result-name" id="resultName" style="font-size:20px;font-weight:700;margin:10px 0;"></div>
-                <div class="result-stats">
-                    <div class="result-stat">
-                        <div>সঠিক উত্তর</div>
-                        <div class="value" id="correctAnswers">০</div>
-                    </div>
-                    <div class="result-stat">
-                        <div>ভুল উত্তর</div>
-                        <div class="value" id="wrongAnswers">০</div>
-                    </div>
-                </div>
-                <div class="score-box">
-                    <div>স্কোর</div>
-                    <div class="score-value" id="scoreText">০ / ২৫</div>
-                </div>
+        <!-- TEACHER REVIEW / GRADING SCREEN -->
+        <div id="reviewScreen" class="hidden">
+            <div class="card" id="reviewContent">
+                <!-- Dynamically populated by JS -->
             </div>
-
-            <div class="restart-wrap">
-                <button id="tryAgainBtn" onclick="restart()">আবার চেষ্টা করুন</button>
-                <button id="backToScoreboardBtn" class="secondary hidden" onclick="closeHistory()">স্কোরবোর্ডে ফিরে যান</button>
+            <div style="text-align: center; margin-bottom: 30px;">
+                <button class="secondary" onclick="closeReview()">স্কোরবোর্ডে ফিরে যান (Back)</button>
             </div>
         </div>
 
@@ -306,24 +311,29 @@ const HTML_CONTENT = `<!DOCTYPE html>
             }
         ];
 
-        let questions = [];
+        let questions = []; // Flattened list of all questions
         let currentName = "";
-        let globalScoreList = []; // Holds data for the scoreboard review
+        let globalScoreList = []; 
 
-        function normalize(s) {
-            return (s || "")
-                .trim()
-                .toLowerCase()
-                .replace(/[ًٌٍَُِّْـ]/g, "")
-                .replace(/[إأآٱ]/g, "ا")
-                .replace(/[ى]/g, "ي")
-                .replace(/[؟،,.!?।]/g, "")
-                .replace(/\\s+/g, " ");
-        }
+        // Initialize flattened questions array globally so grading UI can access it
+        sections.forEach((s, si) => {
+            s.items.forEach((item, ii) => {
+                questions.push({ ...s, item, si, ii });
+            });
+        });
 
         function toBanglaNumber(number) {
             const digits = ["০", "১", "২", "৩", "৪", "৫", "৬", "৭", "৮", "৯"];
             return String(number).replace(/\\d/g, d => digits[d]);
+        }
+
+        // Returns the reference answer for the teacher
+        function getCorrectAnswer(q) {
+            if (q.item[1][0] === "DYNAMIC_NAME") return "اسمي ... (আপনার নাম)";
+            if (q.item[1][0] === "DYNAMIC_TILMEEZ") return "التِّلْمِيذُ ... (যেকোনো পুংলিঙ্গ শব্দ)";
+            if (q.item[1][0] === "DYNAMIC_KITAB") return "هَذَا الْكِتَابُ ... (যেকোনো পুংলিঙ্গ শব্দ)";
+            // For other questions, just show the first acceptable answer as a reference
+            return q.item[1][0];
         }
 
         function startQuiz() {
@@ -332,13 +342,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
                 alert("অনুগ্রহ করে আপনার নাম লিখুন।");
                 return;
             }
-
-            questions = [];
-            sections.forEach((s, si) => {
-                s.items.forEach((item, ii) => {
-                    questions.push({ ...s, item, si, ii });
-                });
-            });
 
             document.getElementById("startScreen").classList.add("hidden");
             document.getElementById("scoreboardSection").classList.add("hidden");
@@ -381,103 +384,38 @@ const HTML_CONTENT = `<!DOCTYPE html>
             document.getElementById("progressBar").style.width = (filled / 25 * 100) + "%";
         }
 
-        function getCorrectAnswer(q) {
-            if (q.item[1][0] === "DYNAMIC_NAME") return "اسمي ... (আপনার নাম)";
-            if (q.item[1][0] === "DYNAMIC_TILMEEZ") return "التِّلْمِيذُ ... (যেকোনো পুংলিঙ্গ শব্দ)";
-            if (q.item[1][0] === "DYNAMIC_KITAB") return "هَذَا الْكِتَابُ ... (যেকোনো পুংলিঙ্গ শব্দ)";
-            return q.item[1][0];
-        }
+        // SUBMIT TEST TO BACKEND WITHOUT GRADING
+        async function submitQuiz() {
+            const btn = document.getElementById("submitBtn");
+            btn.disabled = true;
+            btn.textContent = "জমা হচ্ছে...";
 
-        function submitQuiz() {
-            let correct = 0;
-            let mistakes = [];
-
+            let studentAnswers = [];
             questions.forEach((q, i) => {
                 const textarea = document.querySelector(\`[data-q="\${i}"]\`);
-                const answer = textarea ? textarea.value : "";
-                let valid = false;
-
-                const norm = normalize(answer);
-                const words = norm.split(" ").filter(w => w !== "");
-
-                if (q.item[1][0] === "DYNAMIC_NAME") {
-                    const startsWithIsmi = words[0] === "اسمي";
-                    const remainder = words.slice(1).join(" ");
-                    valid = startsWithIsmi && /[\\u0600-\\u06FF]/.test(remainder);
-                } else if (q.item[1][0] === "DYNAMIC_TILMEEZ") {
-                    const startsWithTilmeez = words[0] === "التلميذ"; 
-                    const remainder = words.slice(1).join(" ");
-                    valid = startsWithTilmeez && /[\\u0600-\\u06FF]/.test(remainder) && !remainder.includes("ة");
-                } else if (q.item[1][0] === "DYNAMIC_KITAB") {
-                    const startsWithKitab = words[0] === "هذا" && words[1] === "الكتاب";
-                    const remainder = words.slice(2).join(" ");
-                    valid = startsWithKitab && /[\\u0600-\\u06FF]/.test(remainder) && !remainder.includes("ة");
-                } else {
-                    valid = q.item[1].some(x => norm === normalize(x));
-                }
-
-                if (valid) correct++;
-                else {
-                    mistakes.push({
-                        question: q.item[0],
-                        given: answer.trim() || "কোনো উত্তর দেওয়া হয়নি",
-                        correct: getCorrectAnswer(q)
-                    });
-                }
+                studentAnswers.push(textarea ? textarea.value.trim() : "");
             });
 
-            showMistakes(mistakes);
-            showResult(correct, 25 - correct, currentName);
-
-            // Send score to backend along with the exact mistakes
-            saveScore(currentName, correct, 25, mistakes);
-
-            document.getElementById("quizScreen").classList.add("hidden");
-            document.getElementById("resultScreen").classList.remove("hidden");
-            document.getElementById("scoreboardSection").classList.remove("hidden");
-            window.scrollTo({ top: 0, behavior: "smooth" });
-        }
-
-        function showMistakes(mistakes) {
-            const box = document.getElementById("mistakes");
-            const title = document.getElementById("mistakesTitle");
-
-            if (!mistakes || mistakes.length === 0) {
-                title.textContent = "কোনো ভুল হয়নি!";
-                box.innerHTML = '<div class="no-mistakes">মাশাআল্লাহ! আপনার কোনো ভুল হয়নি।</div>';
-                return;
+            try {
+                await fetch("/api/scores", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name: currentName, answers: studentAnswers, total: 25 })
+                });
+                
+                document.getElementById("quizScreen").classList.add("hidden");
+                document.getElementById("submittedScreen").classList.remove("hidden");
+                fetchScoreboard(); // Refresh in background
+                window.scrollTo({ top: 0, behavior: "smooth" });
+            } catch (e) {
+                alert("জমা দিতে সমস্যা হয়েছে। আবার চেষ্টা করুন।");
+                btn.disabled = false;
+                btn.textContent = "উত্তর জমা দিন";
             }
-
-            title.textContent = "ভুলগুলো — " + toBanglaNumber(mistakes.length) + "টি";
-            box.innerHTML = mistakes.map((m, i) => \`
-                <div class="mistake">
-                  <div class="mistake-number">ভুল প্রশ্ন \${toBanglaNumber(i + 1)}</div>
-                  <div class="arabic" style="font-size:24px">\${m.question}</div>
-                  <div class="answer-label"><b>উত্তর:</b></div>
-                  <div class="given-answer">\${m.given}</div>
-                  <div class="answer-label"><b>সঠিক উত্তর:</b></div>
-                  <div class="correct-answer" dir="rtl" style="font-family:'Noto Naskh Arabic',serif;font-size:23px">\${m.correct}</div>
-                </div>
-            \`).join("");
-        }
-
-        function showResult(score, wrong, nameToShow, attemptNumber = null) {
-            let attemptText = attemptNumber ? \` (চেষ্টা: \${toBanglaNumber(attemptNumber)})\` : "";
-            document.getElementById("resultName").textContent = nameToShow + attemptText;
-            document.getElementById("correctAnswers").textContent = toBanglaNumber(score);
-            document.getElementById("wrongAnswers").textContent = toBanglaNumber(wrong);
-            document.getElementById("scoreText").textContent = toBanglaNumber(score) + " / ২৫";
-        }
-
-        function restart() {
-            document.getElementById("resultScreen").classList.add("hidden");
-            document.getElementById("startScreen").classList.remove("hidden");
-            document.getElementById("scoreboardSection").classList.remove("hidden");
-            document.getElementById("studentName").value = currentName;
         }
 
         // ---------------------------------------------
-        // SCOREBOARD API CALLS & HISTORY REVIEW
+        // SCOREBOARD & TEACHER GRADING API
         // ---------------------------------------------
         async function fetchScoreboard() {
             try {
@@ -490,68 +428,147 @@ const HTML_CONTENT = `<!DOCTYPE html>
                     return;
                 }
 
-                tbody.innerHTML = globalScoreList.map((item, idx) => \`
+                tbody.innerHTML = globalScoreList.map((item, idx) => {
+                    // Decide what to show based on status
+                    let scoreDisplay = item.status === "pending" 
+                        ? \`<span class="status-pending">অপেক্ষমাণ</span>\` 
+                        : \`<span style="color:var(--primary);font-weight:700;">\${toBanglaNumber(item.score)} / \${toBanglaNumber(item.total)}</span>\`;
+
+                    return \`
                     <tr>
                         <td><span class="rank-badge">\${toBanglaNumber(idx + 1)}</span></td>
                         <td>
                             <b>\${escapeHtml(item.name)}</b>
                             <div class="attempt-tag">চেষ্টা: \${toBanglaNumber(item.attempt || 1)}</div>
                         </td>
-                        <td style="color:var(--primary);font-weight:700;">\${toBanglaNumber(item.score)} / \${toBanglaNumber(item.total)}</td>
+                        <td>\${scoreDisplay}</td>
                         <td>
-                            <button class="secondary" style="margin:0;padding:6px 12px;font-size:13px;" onclick="viewHistory(\${idx})">খাতা দেখুন</button>
+                            <button class="secondary" style="margin:0;padding:6px 12px;font-size:13px;" onclick="viewPaper('\${item.id}')">খাতা দেখুন</button>
                             <div style="font-size:12px;color:#777;margin-top:5px;">\${item.timestamp}</div>
                         </td>
                     </tr>
-                \`).join("");
+                    \`;
+                }).join("");
             } catch (e) {
                 console.error("Scoreboard fetch failed", e);
             }
         }
 
-        async function saveScore(name, score, total, mistakes) {
-            try {
-                await fetch("/api/scores", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ name, score, total, mistakes })
-                });
-                fetchScoreboard(); // Reload board with new attempt count and view button
-            } catch (e) {
-                console.error("Save score failed", e);
-            }
-        }
-
-        // Function to load a specific student's past paper
-        function viewHistory(index) {
-            const data = globalScoreList[index];
-            if (!data) return;
-
-            showMistakes(data.mistakes || []);
-            showResult(data.score, (data.total - data.score), data.name, data.attempt || 1);
+        // GENERATE THE TEACHER GRADING INTERFACE OR STUDENT REVIEW
+        function viewPaper(id) {
+            const paper = globalScoreList.find(x => x.id === id);
+            if (!paper) return;
 
             document.getElementById("startScreen").classList.add("hidden");
-            document.getElementById("quizScreen").classList.add("hidden");
             document.getElementById("scoreboardSection").classList.add("hidden");
-            document.getElementById("resultScreen").classList.remove("hidden");
+            document.getElementById("reviewScreen").classList.remove("hidden");
 
-            // Swap buttons to show "Back to Scoreboard" mode
-            document.getElementById("tryAgainBtn").classList.add("hidden");
-            document.getElementById("backToScoreboardBtn").classList.remove("hidden");
+            const container = document.getElementById("reviewContent");
+            let html = \`<h2>শিক্ষার্থী: \${escapeHtml(paper.name)} (চেষ্টা: \${toBanglaNumber(paper.attempt || 1)})</h2>\`;
 
+            if (paper.status === "pending") {
+                html += \`
+                    <div class="teacher-warning">
+                        ⚠️ সতর্কবাণী: শুধুমাত্র শিক্ষক এই খাতাটি মূল্যায়ন করবেন।
+                    </div>
+                    <form id="gradingForm">
+                \`;
+            } else {
+                html += \`
+                    <div class="success-box">
+                        এই খাতাটির মূল্যায়ন সম্পন্ন হয়েছে।<br>
+                        প্রাপ্ত নম্বর: \${toBanglaNumber(paper.score)} / \${toBanglaNumber(paper.total)}
+                    </div>
+                \`;
+            }
+
+            paper.answers.forEach((ans, i) => {
+                const q = questions[i];
+                html += \`
+                <div class="mistake">
+                    <div class="mistake-number">প্রশ্ন \${toBanglaNumber(i + 1)}</div>
+                    <div class="arabic" style="font-size:24px">\${q.item[0]}</div>
+                    <div class="answer-label">শিক্ষার্থীর উত্তর:</div>
+                    <div class="given-answer" dir="rtl" style="font-family:'Noto Naskh Arabic',serif;font-size:22px;">\${ans || "<em>কোনো উত্তর দেওয়া হয়নি</em>"}</div>
+                    <div class="answer-label">সঠিক উত্তর (রেফারেন্স):</div>
+                    <div class="correct-answer" dir="rtl" style="font-family:'Noto Naskh Arabic',serif;font-size:20px;">\${getCorrectAnswer(q)}</div>
+                \`;
+
+                if (paper.status === "pending") {
+                    html += \`
+                    <div class="grading-options">
+                        <label><input type="radio" name="grade_\${i}" value="1" required> ✅ সঠিক</label>
+                        <label><input type="radio" name="grade_\${i}" value="0"> ❌ ভুল</label>
+                    </div>
+                    \`;
+                } else {
+                    const isCorrect = paper.gradedAnswers[i];
+                    html += \`
+                    <div style="margin-top:15px; font-weight:800; font-size:16px; color: \${isCorrect ? 'var(--primary)' : 'var(--danger)'}">
+                        \${isCorrect ? '✅ সঠিক হিসেবে মূল্যায়ন করা হয়েছে' : '❌ ভুল হিসেবে মূল্যায়ন করা হয়েছে'}
+                    </div>
+                    \`;
+                }
+
+                html += \`</div>\`;
+            });
+
+            if (paper.status === "pending") {
+                html += \`
+                    <div style="text-align:center; margin-top:20px;">
+                        <button type="button" onclick="submitGrades('\${paper.id}')" style="font-size:18px; padding: 15px 30px;">মূল্যায়ন জমা দিন (Submit Grades)</button>
+                    </div>
+                    </form>
+                \`;
+            }
+
+            container.innerHTML = html;
             window.scrollTo({ top: 0, behavior: "smooth" });
         }
 
-        // Function to exit the history review mode
-        function closeHistory() {
-            document.getElementById("resultScreen").classList.add("hidden");
+        // TEACHER SUBMITS THE FINAL GRADES
+        async function submitGrades(id) {
+            const form = document.getElementById("gradingForm");
+            
+            // Check if teacher answered all radio buttons
+            if (!form.checkValidity()) {
+                alert("দয়া করে প্রতিটি প্রশ্নের জন্য 'সঠিক' বা 'ভুল' নির্বাচন করুন।");
+                return;
+            }
+
+            let score = 0;
+            let gradedAnswers = []; // true/false array
+
+            questions.forEach((q, i) => {
+                const val = form.elements[\`grade_\${i}\`].value;
+                const isCorrect = (val === "1");
+                gradedAnswers.push(isCorrect);
+                if (isCorrect) score++;
+            });
+
+            try {
+                const res = await fetch("/api/grade", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ id, score, gradedAnswers })
+                });
+
+                if (res.ok) {
+                    alert("খাতাটি সফলভাবে মূল্যায়ন করা হয়েছে!");
+                    closeReview();
+                    fetchScoreboard();
+                } else {
+                    alert("সমস্যা হয়েছে, আবার চেষ্টা করুন।");
+                }
+            } catch (e) {
+                console.error("Grading failed", e);
+            }
+        }
+
+        function closeReview() {
+            document.getElementById("reviewScreen").classList.add("hidden");
             document.getElementById("startScreen").classList.remove("hidden");
             document.getElementById("scoreboardSection").classList.remove("hidden");
-
-            // Reset buttons for normal quiz flow
-            document.getElementById("tryAgainBtn").classList.remove("hidden");
-            document.getElementById("backToScoreboardBtn").classList.add("hidden");
-            document.getElementById("studentName").value = currentName || "";
         }
 
         async function clearScoreboard() {
